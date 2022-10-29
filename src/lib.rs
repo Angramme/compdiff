@@ -1,6 +1,6 @@
 pub mod cli;
 
-use std::{fmt, process::{Command, Stdio, ExitStatus}, io::{BufWriter, Write}, path::{Path, PathBuf}, iter, env::current_dir};
+use std::{process::{Command, Stdio, ExitStatus, Child}, io::Write, path::{Path, PathBuf}, env::current_dir};
 use std::ffi::OsStr;
 use std::error::Error;
 use cli::Cli;
@@ -37,96 +37,125 @@ where P: AsRef<Path>
     Ok(cmd)
 }
 
-#[derive(Debug, Clone)]
-pub enum RunError{
-    StdErrs(String, Vec<(PathBuf, ExitStatus, String)>),
+
+
+pub type Success<'a> = (&'a Path, String);
+pub type Failure<'a> = (&'a Path, ExitStatus, String);
+pub type Execution<'a> = Result<Success<'a>, Failure<'a>>;
+
+pub fn generate_input(args: &Cli) -> Execution {
+    execute_prog(args.generator.as_path())
 }
 
-impl Error for RunError {}
-impl fmt::Display for RunError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::StdErrs(_, xs) => for (p, s, e) in xs {
-                write!(f, "program {} failed with status {} and the error: {}", p.display(), s, e)?;
-            }
-        };
-        Ok(())
-    }
-}
-
-pub fn run_round(args: &Cli) -> Result<(String, Vec<(&Path, String)>), RunError>  {
-    let gen = get_command(args.generator.as_path())
-        .expect("cannot open generator")
+pub fn execute_prog(path: & Path) -> Execution
+{
+    let gen = get_command(path)
+        .expect("cannot open program")
         .output()
-        .expect("cannot start generator program");
-
-    let mut progs: Vec<_> = 
-        iter::once(args.program.as_path())
-        .chain(args.reference
-            .iter()
-            .map(PathBuf::as_path))
-        .map(get_command)
-        .map(|x| x
-            .expect("cannot open program")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("cannot start the program")
-        )
-        .collect();
+        .expect("cannot start program");
 
     let gen_errors = String::from_utf8(gen.stderr).expect("error parsing string");
-    if !gen_errors.is_empty() {
-        return Err(RunError::StdErrs(String::new(), vec![(
-            args.program.clone(), 
-            gen.status, 
-            gen_errors
-        )]));
+    if !gen_errors.is_empty() || !gen.status.success()  {
+        Err((path, gen.status, gen_errors))
+    } else {
+        Ok((path, String::from_utf8(gen.stdout).expect("cannot parse string")))
     }
-    
-    let input = String::from_utf8(gen.stdout).expect("error parsing string");
-    {
-        let mut writers: Vec<_> = progs
-            .iter_mut()
-            .map(|x| x.stdin.as_mut().expect("cannot access stdin!"))
-            .map(BufWriter::new)
-            .collect();
-    
-        for line in input.lines() {
-            let line = String::from(line) + "\n";
-            for writer in &mut writers{
-                writer.write_all(line.as_bytes()).expect("error writing to the program!");
-            }
-        }
-    }
+}
 
-    let outps: Vec<_> = progs
-        .into_iter()
-        .map(|x| x
-            .wait_with_output()
-            .expect("program cannot terminate"))
-        .collect();
-    
-    let stderrs: Vec<_> = outps
+pub fn start_prog_input<P>(path: P, input: &str) -> Child
+where P: AsRef<Path>
+{
+    let mut gen = get_command(path)
+        .expect("cannot open generator")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("cannot start generator program");
+
+    let mut stdin = gen.stdin.take().expect("failed to open stdin");
+    stdin.write_all(input.as_bytes()).expect("failed to write input!");
+    gen
+}
+
+pub fn end_child_output(ch: Child, path: & Path) -> Execution
+{
+    let out = ch.wait_with_output().expect("failed to read stdout and stderr");
+    let gen_errors = String::from_utf8(out.stderr).expect("error parsing string");
+    if !gen_errors.is_empty() || !out.status.success() {
+        Err((path, out.status, gen_errors))
+    } else {
+        Ok((path, String::from_utf8(out.stdout).expect("cannot parse string")))
+    }
+}
+
+pub fn execute_prog_input<'a>(path: &'a Path, input: &str) -> Execution<'a>
+{
+    let gen = start_prog_input(path, input);
+    end_child_output(gen, path)
+}
+
+pub fn execute_progs_input<'a, I>(paths: I, input: &str) -> Vec<Execution<'a>>
+where I: Iterator<Item = &'a Path>, 
+{
+    paths
+        .map(|path| (path, start_prog_input(path, input)))
+        .map(|(path, child)| end_child_output(child, path))
+        .collect()
+}
+
+pub enum Round<'a>{
+    GeneratorFail(Failure<'a>),
+    ReferenceFails(String, Vec<Failure<'a>>),
+    ProgramFail(String, Failure<'a>),
+    Success(String, Success<'a>, Vec<Success<'a>>),
+}
+
+pub fn run_round(args: &Cli) -> Round {
+    let inp = generate_input(args);
+    if let Err(x) = inp { return Round::GeneratorFail(x); }
+    let inp = unsafe{ inp.unwrap_unchecked() };
+
+    let prg = execute_prog_input(args.program.as_path(), inp.1.as_str());
+    if let Err(x) = prg { return Round::ProgramFail(inp.1, x); }
+    let prq = unsafe{ prg.unwrap_unchecked() };
+
+    let refs = args.reference.iter()
+        .map(PathBuf::as_path);
+    let refs = execute_progs_input(refs, inp.1.as_str());
+    if refs.iter().any(|x| x.is_err()) { 
+        let r = refs.into_iter().filter_map(|x| x.err()).collect();
+        Round::ReferenceFails(inp.1, r)
+    } else { 
+        let r = refs.into_iter().map(|x| unsafe{ x.unwrap_unchecked() }).collect();
+        Round::Success(inp.1, prq, r)
+    }
+}
+
+pub enum Mismatch<'a>{
+    AllMatch,
+    RefMismatch(Vec<Success<'a>>),
+    ProgMismatch(Success<'a>, Vec<Success<'a>>),
+}
+
+pub fn test_mismatch<'a>(prog: Success<'a>, refs: Vec<Success<'a>>) -> Mismatch<'a> {
+    if refs.iter().all(|x| x.1 == prog.1) { return Mismatch::AllMatch; }
+
+    // just a random string which will should never be the output
+    // indeed it is impossible that the \0 is at the beginning
+    let bad = String::from("\0\n\t@"); 
+    let bad = refs
         .iter()
-        .zip(iter::once(args.program.clone())
-            .chain(args.reference.iter().cloned()))
-        .filter(|(x, _)| !x.stderr.is_empty())
-        .map(|(x, p)| (p, x.status, String::from_utf8(x.stderr.clone()).expect("cannot parse string.")))
-        .collect();
-
-    if !stderrs.is_empty() {
-        return Err(RunError::StdErrs(input, stderrs));
+        .map(|x| &x.1)
+        .filter(|x| x != &&prog.1)
+        .reduce(|a, i| if a == i { a } else { &bad } )
+        .expect("this iterator should not be empty!")
+        == &bad;
+        
+    if bad { Mismatch::RefMismatch(refs) }
+    else { 
+        let refs = refs.into_iter().filter(|x| x.1 != prog.1).collect();
+        Mismatch::ProgMismatch(prog, refs) 
     }
-
-    Ok((input, 
-        iter::once(&args.program)
-        .chain(args.reference.iter())
-        .map(PathBuf::as_path)
-        .zip(outps
-            .into_iter()
-            .map(|o| String::from_utf8(o.stdout).expect("cannot parse string!"))
-        ).collect()))
 }
 
