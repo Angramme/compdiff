@@ -1,6 +1,6 @@
 [package]
 name = "compdiff"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 author = ["Kacper Ozieblowski"]
 description= "Compare the output of program to reference programs."
@@ -11,3 +11,4 @@ description= "Compare the output of program to reference programs."
 clap = { version = "4.0", features = ["derive"] }
 which = { version = "4.3.0", features = [] }
 string-error = "0.1.0"
+process_control = "4.0.1"
