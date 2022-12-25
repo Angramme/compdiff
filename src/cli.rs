@@ -89,7 +89,10 @@ pub fn handle_cli(args: Cli){
                 display_failure(fail);
                 println!("with the following input: \n{}", inp);
             },
-            R::ReferenceFails(_, fails) => fails.into_iter().for_each(display_failure),
+            R::ReferenceFails(inp, fails) => {
+                fails.into_iter().for_each(display_failure);
+                println!("with the following input: \n{}", inp);   
+            },
             R::Success(inp, prog, refs) => if refs.is_empty() {
                 println!("  🚧 warning : skipping reference checks as no references were supplied...")        
             } else { 
