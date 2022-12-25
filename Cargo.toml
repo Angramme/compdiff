@@ -3,7 +3,7 @@ name = "compdiff"
 version = "0.1.1"
 edition = "2021"
 author = ["Kacper Ozieblowski"]
-description= "Compare the output of program to reference programs."
+description= "Compare the output of programme to reference programmes. Apply time and memory limits."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -8,27 +8,27 @@ use crate::{run_round, Failure, test_mismatch, Success};
 #[derive(Parser)]
 #[command(author, version, about)]
 pub struct Cli {
-    /// the test-case generator program
+    /// the test-case generator programme
     #[arg(short, long, value_name = "FILE")]
     pub generator: PathBuf,
 
-    /// the program to be examined
+    /// the programme to be examined
     #[arg(short, long, value_name = "FILE")]
     pub program: PathBuf,
 
-    /// the reference program/s
+    /// the reference programme/programmes
     #[arg(short, long, alias = "ref", action = clap::ArgAction::Append)]
     pub reference: Vec<PathBuf>,
 
-    /// for how many rounds should the program be ran
+    /// for how many rounds should the programme be ran
     #[arg(short = 'c', long)]
     pub rounds: Option<u64>,
 
-    /// the time limit (in seconds) for the programme execution (references are left alone)
+    /// time limit (s) for the programme excluding references
     #[arg(short = 't', long)]
     pub time_limit: Option<f64>,
 
-    /// the memory limit (in kilo-bytes) for the programme execution (references are left alone)
+    /// memory limit (kB) for the programme excluding references
     #[arg(short = 'm', long)]
     pub memory_limit: Option<usize>,
 }
